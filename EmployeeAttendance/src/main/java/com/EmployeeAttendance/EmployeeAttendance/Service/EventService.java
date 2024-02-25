@@ -1,52 +1,85 @@
-package com.EmployeeAttendance.EmployeeAttendance.Service;
+package com.EmployeeAttendance.EmployeeAttendance.service;
 
-import com.EmployeeAttendance.EmployeeAttendance.time.LocalDateTIme.AttendanceEvent;
+import com.EmployeeAttendance.EmployeeAttendance.dto.AttendanceEvent;
+import com.EmployeeAttendance.EmployeeAttendance.entity.AttendenceEntity;
+import com.EmployeeAttendance.EmployeeAttendance.entity.SwipeEventEntity;
+import com.EmployeeAttendance.EmployeeAttendance.enums.UserState;
+import com.EmployeeAttendance.EmployeeAttendance.reposervice.SwipeEntityReposervice;
+import com.EmployeeAttendance.EmployeeAttendance.repository.AttendanceEntityRepository;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
-import java.time.LocalDate;
-import java.util.HashMap;
-import java.util.Map;
+import java.time.*;
+import java.util.*;
+import java.util.stream.Collectors;
+
 @Service
 public class EventService {
 
 
-    // Map to store swipe in/out events for each employee on a given date
+    private static final ZoneId zone = ZoneId.of("Asia/Kolkata");
+    private final SwipeEntityReposervice swipeEntityReposervice;
+    private final AttendanceEntityRepository attendanceEntityRepository;
     private Map<String, Map<LocalDate, Duration>> employeeAttendanceMap = new HashMap<>();
 
-    public void processEvent(AttendanceEvent event) {
-        // Initialize attendance map for the employee if not present
-        employeeAttendanceMap.putIfAbsent(event.getEmployeeId(), new HashMap<>());
-
-        // Get the map of attendance for the employee
-        Map<LocalDate, Duration> attendanceMap = employeeAttendanceMap.get(event.getEmployeeId());
-
-        // Update or add attendance duration for the date of the event
-        attendanceMap.compute(event.getTimestamp().toLocalDate(), (date, duration) -> {
-            if (duration == null) {
-                return Duration.ZERO.plusHours(event.getEventType() == AttendanceEvent.EventType.SWIPE_IN ? 1 : -1);
-            } else {
-                return duration.plusHours(event.getEventType() == AttendanceEvent.EventType.SWIPE_IN ? 1 : -1);
-            }
-        });
-
-        // Calculate attendance status based on total duration for the date
-        Duration totalAttendance = attendanceMap.values().stream().reduce(Duration::plus).orElse(Duration.ZERO);
-        String attendanceStatus = calculateAttendanceStatus(totalAttendance);
-
-        // Store or send attendance status as needed (e.g., store in database or send to Kafka)
-        // attendanceService.storeAttendance(event.getEmployeeId(), event.getTimestamp().toLocalDate(), attendanceStatus);
+    public EventService(SwipeEntityReposervice swipeEntityReposervice, AttendanceEntityRepository attendanceEntityRepository) {
+        this.swipeEntityReposervice = swipeEntityReposervice;
+        this.attendanceEntityRepository = attendanceEntityRepository;
     }
 
-    private String calculateAttendanceStatus(Duration totalAttendance) {
+    public void saveEvent(AttendanceEvent attendanceEvent) {
+        swipeEntityReposervice.save(attendanceEvent);
+    }
+
+    //Cron to run at 12 AM every day
+    @Scheduled(cron = "0 0 0 * * *")
+    public List<AttendenceEntity> processEvent() {
+
+        List<AttendenceEntity> response = new ArrayList<>();
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime startOfDay = now.toLocalDate().atStartOfDay();
+
+        // Calculate the end of the day
+        LocalDateTime endOfDay = now.toLocalDate().plusDays(1).atStartOfDay().minusSeconds(1);
+
+        // Get all events for the last 24 hours
+        List<SwipeEventEntity> events = swipeEntityReposervice.findByTimestampBetween(startOfDay, endOfDay);
+
+        Map<String, List<SwipeEventEntity>> userToEventMap= events.stream().collect(Collectors.groupingBy(SwipeEventEntity::getEmployeeId));
+
+        userToEventMap.forEach((userId, userEvents) -> {
+            Duration totalAttendance = Duration.ZERO;
+            userEvents.sort(Comparator.comparing(SwipeEventEntity::getTimestamp));
+            for (int i = 0; i < userEvents.size()-1; i++) {
+                LocalDateTime start = userEvents.get(i).getTimestamp();
+                LocalDateTime end = userEvents.get(i + 1).getTimestamp();
+                totalAttendance = totalAttendance.plus(Duration.between(start, end));
+            }
+            UserState attendanceStatus = calculateAttendanceStatus(totalAttendance);
+            AttendenceEntity attendenceEntity = new AttendenceEntity();
+            attendenceEntity.setEmployeeId(userId);
+            attendenceEntity.setDate(startOfDay.toLocalDate());
+            attendenceEntity.setUserState(attendanceStatus);
+
+            // Save the attendance status or send to Kafka
+            //attendanceEntityRepository.save(attendenceEntity);
+
+            response.add(attendenceEntity);
+
+        });
+
+        return response;
+    }
+
+    private UserState calculateAttendanceStatus(Duration totalAttendance) {
         long totalHours = totalAttendance.toHours();
 
         if (totalHours < 4) {
-            return "Absent";
+            return UserState.ABSENT;
         } else if (totalHours >= 4 && totalHours < 8) {
-            return "Half day";
+            return UserState.HALF_DAY;
         } else {
-            return "Present";
+            return UserState.PRESENT;
         }
     }
 

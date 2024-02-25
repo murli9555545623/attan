@@ -1,13 +1,17 @@
 package com.EmployeeAttendance.EmployeeAttendance.EventController;
 
-import com.EmployeeAttendance.EmployeeAttendance.Service.EventService;
-import com.EmployeeAttendance.EmployeeAttendance.time.LocalDateTIme.AttendanceEvent;
+import com.EmployeeAttendance.EmployeeAttendance.entity.AttendenceEntity;
+import com.EmployeeAttendance.EmployeeAttendance.service.EventService;
+import com.EmployeeAttendance.EmployeeAttendance.dto.AttendanceEvent;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 @RestController
 public class EventController {
@@ -21,10 +25,17 @@ public class EventController {
             return new ResponseEntity<>("Invalid event data", HttpStatus.BAD_REQUEST);
         }
 
-        // Validate and store event
-        eventService.processEvent(event);
+        //Store event
+        eventService.saveEvent(event);
 
         return new ResponseEntity<>("Event received and processed successfully", HttpStatus.OK);
     }
+
+   @GetMapping("/total")
+    public ResponseEntity<List<AttendenceEntity>> totalhours ()
+   {
+       return new ResponseEntity<>(eventService.processEvent(),HttpStatus.OK);
+   }
+
 
 }
